@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: pms-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: pms
+      POSTGRES_USER: ${DB_USERNAME:-root}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+    volumes:
+      - pms-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  pms-postgres-data:
+
