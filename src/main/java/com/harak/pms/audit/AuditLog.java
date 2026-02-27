@@ -40,4 +40,3 @@ public class AuditLog {
     @Column(nullable = false)
     private Instant timestamp;
 }
-

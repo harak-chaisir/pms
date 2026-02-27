@@ -1,5 +1,6 @@
 package com.harak.pms.common;
 
+import com.harak.pms.clinicalrecord.ClinicalRecordNotFoundException;
 import com.harak.pms.patient.PatientNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -53,6 +54,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(PatientNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handlePatientNotFound(PatientNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "status", HttpStatus.NOT_FOUND.value(),
+                "error", ex.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(ClinicalRecordNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleClinicalRecordNotFound(ClinicalRecordNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "timestamp", Instant.now().toString(),
                 "status", HttpStatus.NOT_FOUND.value(),

@@ -1,7 +1,6 @@
 package com.harak.pms.patient;
 
-import com.harak.pms.audit.AuditService;
-import jakarta.servlet.http.HttpServletRequest;
+import com.harak.pms.audit.Auditable;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -11,68 +10,86 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
+/**
+ * REST controller for patient management endpoints.
+ *
+ * <p>All endpoints require authentication and role-based authorization.
+ * Every action that creates, reads, updates, or deletes PHI is audit-logged
+ * automatically via the {@link Auditable} AOP aspect per HIPAA §164.312(b).
+ */
 @RestController
 @RequestMapping("/api/patients")
 @RequiredArgsConstructor
 public class PatientController {
 
     private final PatientService patientService;
-    private final AuditService auditService;
 
+    /**
+     * Creates a new patient record with encrypted PHI fields.
+     *
+     * <p>The medical record number is checked for uniqueness. The creation event
+     * is recorded in the audit trail automatically via {@link Auditable}.
+     *
+     * @param request the validated patient creation request containing PHI fields.
+     * @return the created patient with masked SSN, wrapped in a {@code 201 Created} response.
+     * @throws IllegalArgumentException if a patient with the given MRN already exists.
+     */
     @PostMapping
     @PreAuthorize("hasAnyAuthority('ROLE_ADMIN', 'ROLE_DOCTOR', 'ROLE_NURSE')")
+    @Auditable(action = "PATIENT_CREATED", entityType = "PATIENT",
+            detailExpression = "'Created patient with MRN: ' + #request.medicalRecordNumber()")
     public ResponseEntity<PatientResponse> createPatient(
-            @Valid @RequestBody CreatePatientRequest request,
-            HttpServletRequest httpRequest) {
+            @Valid @RequestBody CreatePatientRequest request) {
 
         Patient patient = patientService.createPatient(request);
-
-        auditService.logEvent(
-                "PATIENT_CREATED",
-                "PATIENT",
-                patient.getId(),
-                getCurrentUsername(),
-                getClientIp(httpRequest),
-                "Created patient with MRN: " + patient.getMedicalRecordNumber()
-        );
-
         return ResponseEntity.status(HttpStatus.CREATED).body(PatientResponse.from(patient));
     }
 
+    /**
+     * Retrieves a patient record by its unique identifier.
+     *
+     * <p>The SSN is masked in the response (only last 4 digits visible).
+     * Access is restricted to ADMIN, DOCTOR, and NURSE roles.
+     * The access event is recorded in the audit trail automatically via {@link Auditable}.
+     *
+     * @param id the UUID of the patient to retrieve.
+     * @return the patient data with masked SSN, wrapped in a {@code 200 OK} response.
+     * @throws PatientNotFoundException if no active patient exists with the given ID.
+     */
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyAuthority('ROLE_ADMIN', 'ROLE_DOCTOR', 'ROLE_NURSE')")
-    public ResponseEntity<PatientResponse> getPatientById(
-            @PathVariable UUID id,
-            HttpServletRequest httpRequest) {
+    @Auditable(action = "PATIENT_VIEWED", entityType = "PATIENT", detail = "Viewed patient record")
+    public ResponseEntity<PatientResponse> getPatientById(@PathVariable UUID id) {
 
         Patient patient = patientService.getPatientById(id);
-
-        auditService.logEvent(
-                "PATIENT_VIEWED",
-                "PATIENT",
-                patient.getId(),
-                getCurrentUsername(),
-                getClientIp(httpRequest),
-                "Viewed patient record"
-        );
-
         return ResponseEntity.ok(PatientResponse.from(patient));
     }
 
+    /**
+     * Retrieves a paginated list of all active patients.
+     *
+     * <p>Supports configurable pagination and sorting. Page size is clamped
+     * to a maximum of 100 to prevent excessive data retrieval.
+     *
+     * @param page      the zero-based page index (default 0).
+     * @param size      the page size (default 20, max 100).
+     * @param sortBy    the field to sort by (default {@code createdAt}).
+     * @param direction the sort direction: {@code asc} or {@code desc} (default {@code desc}).
+     * @return a page of patients with masked SSNs, wrapped in a {@code 200 OK} response.
+     */
     @GetMapping
     @PreAuthorize("hasAnyAuthority('ROLE_ADMIN', 'ROLE_DOCTOR', 'ROLE_NURSE')")
+    @Auditable(action = "PATIENT_LIST_VIEWED", entityType = "PATIENT",
+            detailExpression = "'Listed patients — page: ' + #page + ', size: ' + T(Math).min(#size, 100)")
     public ResponseEntity<Page<PatientResponse>> getAllPatients(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc") String direction,
-            HttpServletRequest httpRequest) {
+            @RequestParam(defaultValue = "desc") String direction) {
 
         int clampedSize = Math.min(size, 100);
         Sort sort = direction.equalsIgnoreCase("asc")
@@ -83,90 +100,64 @@ public class PatientController {
         Page<Patient> patients = patientService.getAllPatients(pageable);
         Page<PatientResponse> responsePage = patients.map(PatientResponse::from);
 
-        auditService.logEvent(
-                "PATIENT_LIST_VIEWED",
-                "PATIENT",
-                null,
-                getCurrentUsername(),
-                getClientIp(httpRequest),
-                "Listed patients — page: " + page + ", size: " + clampedSize
-        );
-
         return ResponseEntity.ok(responsePage);
     }
 
+    /**
+     * Retrieves a patient record by medical record number.
+     *
+     * @param mrn the medical record number to look up.
+     * @return the patient data with masked SSN, wrapped in a {@code 200 OK} response.
+     * @throws PatientNotFoundException if no active patient exists with the given MRN.
+     */
     @GetMapping("/mrn/{mrn}")
     @PreAuthorize("hasAnyAuthority('ROLE_ADMIN', 'ROLE_DOCTOR', 'ROLE_NURSE')")
-    public ResponseEntity<PatientResponse> getPatientByMrn(
-            @PathVariable String mrn,
-            HttpServletRequest httpRequest) {
+    @Auditable(action = "PATIENT_VIEWED", entityType = "PATIENT", detail = "Viewed patient by MRN")
+    public ResponseEntity<PatientResponse> getPatientByMrn(@PathVariable String mrn) {
 
         Patient patient = patientService.getPatientByMedicalRecordNumber(mrn);
-
-        auditService.logEvent(
-                "PATIENT_VIEWED",
-                "PATIENT",
-                patient.getId(),
-                getCurrentUsername(),
-                getClientIp(httpRequest),
-                "Viewed patient by MRN"
-        );
-
         return ResponseEntity.ok(PatientResponse.from(patient));
     }
 
+    /**
+     * Updates an existing patient record with the provided non-null fields.
+     *
+     * <p>Only fields present in the request body are applied. The list of updated
+     * field names (not values) is recorded in the audit trail to avoid logging PHI.
+     *
+     * @param id      the UUID of the patient to update.
+     * @param request the validated update request containing fields to change.
+     * @return the updated patient with masked SSN, wrapped in a {@code 200 OK} response.
+     * @throws PatientNotFoundException if no active patient exists with the given ID.
+     */
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyAuthority('ROLE_ADMIN', 'ROLE_DOCTOR', 'ROLE_NURSE')")
+    @Auditable(action = "PATIENT_UPDATED", entityType = "PATIENT",
+            detailExpression = "'Updated fields: ' + @patientService.getUpdatedFieldNames(#request)")
     public ResponseEntity<PatientResponse> updatePatient(
             @PathVariable UUID id,
-            @Valid @RequestBody UpdatePatientRequest request,
-            HttpServletRequest httpRequest) {
+            @Valid @RequestBody UpdatePatientRequest request) {
 
-        List<String> updatedFields = patientService.getUpdatedFieldNames(request);
         Patient patient = patientService.updatePatient(id, request);
-
-        auditService.logEvent(
-                "PATIENT_UPDATED",
-                "PATIENT",
-                patient.getId(),
-                getCurrentUsername(),
-                getClientIp(httpRequest),
-                "Updated fields: " + updatedFields
-        );
-
         return ResponseEntity.ok(PatientResponse.from(patient));
     }
 
+    /**
+     * Soft-deletes a patient record. Restricted to ADMIN role only.
+     *
+     * <p>Per HIPAA §164.530(j), patient records are never physically deleted.
+     * The soft-delete event is recorded in the audit trail automatically via {@link Auditable}.
+     *
+     * @param id the UUID of the patient to soft-delete.
+     * @return a {@code 204 No Content} response.
+     * @throws PatientNotFoundException if no active patient exists with the given ID.
+     */
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public ResponseEntity<Void> deletePatient(
-            @PathVariable UUID id,
-            HttpServletRequest httpRequest) {
+    @Auditable(action = "PATIENT_DELETED", entityType = "PATIENT", detail = "Soft-deleted patient record")
+    public ResponseEntity<Void> deletePatient(@PathVariable UUID id) {
 
         patientService.deletePatient(id);
-
-        auditService.logEvent(
-                "PATIENT_DELETED",
-                "PATIENT",
-                id,
-                getCurrentUsername(),
-                getClientIp(httpRequest),
-                "Soft-deleted patient record"
-        );
-
         return ResponseEntity.noContent().build();
     }
-
-    private String getCurrentUsername() {
-        return SecurityContextHolder.getContext().getAuthentication().getName();
-    }
-
-    private String getClientIp(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
-            return xForwardedFor.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
-    }
 }
-

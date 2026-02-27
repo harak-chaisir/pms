@@ -42,5 +42,3 @@ public class AuthenticationAuditListener {
         return "unknown";
     }
 }
-
-
